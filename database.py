@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 import sqlite3
 import json
 import re
@@ -20,11 +19,16 @@ class HadithDatabase:
 
     def __init__(self):
         """Initializes database connections (SQLite and Redis)."""
-        self.redis = None
+        self.conn = None # Initialize conn to None
+        self.redis = None # Initialize redis to None
         self._connect_redis()
         self._connect_sqlite()
-        self._initialize_database_schema() # Renamed for clarity
-        logger.info("HadithDatabase initialized.")
+        # Only initialize schema if connection was successful
+        if self.conn:
+            self._initialize_database_schema()
+        else:
+             logger.critical("Database schema initialization skipped due to connection failure.")
+        logger.info("HadithDatabase instance partially initialized (connections attempted).")
 
     def _connect_redis(self):
         """Establishes connection to Redis."""
@@ -53,13 +57,12 @@ class HadithDatabase:
             logger.info(f"Successfully connected to SQLite database: {DATABASE_NAME}")
         except sqlite3.Error as e:
             logger.error(f"Failed to initialize SQLite database connection: {str(e)}")
-            raise # Critical error, bot cannot function without DB
+            self.conn = None # Ensure conn is None if connection fails
+            # Consider if we should raise here depending on whether the bot *must* have SQLite
 
     def _initialize_database_schema(self):
         """Initializes SQLite tables, indexes, triggers, and loads initial data if needed."""
-        if not self.conn:
-            logger.error("SQLite connection not available for schema initialization.")
-            return
+        # This method assumes self.conn is valid, checked before calling
         try:
             # Register the normalization function first
             self.conn.create_function("_normalize_internal", 1, self._sanitize_text)
@@ -120,10 +123,11 @@ class HadithDatabase:
 
         except sqlite3.Error as e:
             logger.error(f"Error initializing database schema: {str(e)}")
-            raise
+            # Consider if this should raise an error to stop the bot
 
     def _check_initial_data_and_schema(self):
         """Checks if initial data load or schema migration (normalized_text) is needed."""
+        # Assumes self.conn is valid
         try:
             cursor = self.conn.execute('SELECT COUNT(*) FROM hadiths')
             count = cursor.fetchone()[0]
@@ -149,7 +153,6 @@ class HadithDatabase:
                 logger.info(f"Database already contains {count} hadiths.")
         except sqlite3.Error as e:
              logger.error(f"Error during initial data/schema check: {e}")
-             # Decide if this should raise or just log
 
     def _populate_normalized_text(self):
         """Populates the normalized_text column for existing records."""
@@ -157,12 +160,15 @@ class HadithDatabase:
         try:
             logger.info("Updating 'normalized_text' for all records where it's NULL...")
             cursor = self.conn.execute("SELECT id, text FROM hadiths WHERE normalized_text IS NULL")
-            updates = [(self._sanitize_text(row['text']), row['id']) for row in cursor.fetchall()]
+            # Use a generator expression for potentially large datasets
+            updates = ((self._sanitize_text(row['text']), row['id']) for row in cursor.fetchall())
 
-            if updates:
+            # Process in chunks if needed, although executemany handles large lists well
+            update_list = list(updates)
+            if update_list:
                 with self.conn:
-                    self.conn.executemany("UPDATE hadiths SET normalized_text = ? WHERE id = ?", updates)
-                logger.info(f"Finished populating 'normalized_text' for {len(updates)} records.")
+                    self.conn.executemany("UPDATE hadiths SET normalized_text = ? WHERE id = ?", update_list)
+                logger.info(f"Finished populating 'normalized_text' for {len(update_list)} records.")
             else:
                 logger.info("No records found needing 'normalized_text' update.")
         except sqlite3.Error as e:
@@ -181,7 +187,7 @@ class HadithDatabase:
 
             logger.info(f"Starting initial data import from {JSON_DATA_SOURCE}...")
             self._import_data(data)
-            logger.info("Initial data imported successfully.")
+            # logger.info("Initial data imported successfully.") # Logged inside _import_data completion
 
         except json.JSONDecodeError as e:
             logger.error(f'Error decoding JSON file: {str(e)}')
@@ -296,14 +302,15 @@ class HadithDatabase:
 
         logger.debug(f"Executing FTS query: {fts_query_string}")
         try:
-            with self.conn:
-                cursor = self.conn.execute(f'''
-                    SELECT h.id, h.book, h.text, h.grading, h.normalized_text
-                    FROM hadiths h JOIN hadiths_fts fts ON h.id = fts.rowid
-                    WHERE fts.hadiths_fts MATCH ?
-                    ORDER BY bm25(fts.hadiths_fts) LIMIT ?
-                ''', (fts_query_string, result_limit))
-                return [dict(row) for row in cursor.fetchall()]
+            # Use a single transaction for the query
+            cursor = self.conn.execute(f'''
+                SELECT h.id, h.book, h.text, h.grading, h.normalized_text
+                FROM hadiths h JOIN hadiths_fts fts ON h.id = fts.rowid
+                WHERE fts.hadiths_fts MATCH ?
+                ORDER BY bm25(fts.hadiths_fts) LIMIT ?
+            ''', (fts_query_string, result_limit))
+            results = [dict(row) for row in cursor.fetchall()]
+            return results
         except sqlite3.Error as e:
             logger.error(f'FTS database search error for query "{fts_query_string}": {str(e)}')
             return []
@@ -380,24 +387,24 @@ class HadithDatabase:
         # 2. Database Query (Fallback)
         if not self.conn: return None
         try:
-            with self.conn:
-                cursor = self.conn.execute(
-                    "SELECT id, book, text, grading, normalized_text FROM hadiths WHERE id = ?", (hadith_id,)
-                )
-                result = cursor.fetchone()
-                if result:
-                    result_dict = dict(result)
-                    # Cache the result
-                    if self.redis:
-                        try:
-                            self.redis.setex(cache_key, 3600, json.dumps(result_dict)) # Cache 1 hour
-                        except redis.exceptions.RedisError as e:
-                            logger.warning(f"Redis error during cache SET for hadith ID {hadith_id}: {e}")
-                        except TypeError as e:
-                            logger.error(f"Error serializing hadith {hadith_id} to JSON for caching: {e}")
-                    return result_dict
-                else:
-                    return None # Hadith not found
+            # Use a single transaction for the query
+            cursor = self.conn.execute(
+                "SELECT id, book, text, grading, normalized_text FROM hadiths WHERE id = ?", (hadith_id,)
+            )
+            result = cursor.fetchone()
+            if result:
+                result_dict = dict(result)
+                # Cache the result
+                if self.redis:
+                    try:
+                        self.redis.setex(cache_key, 3600, json.dumps(result_dict)) # Cache 1 hour
+                    except redis.exceptions.RedisError as e:
+                        logger.warning(f"Redis error during cache SET for hadith ID {hadith_id}: {e}")
+                    except TypeError as e:
+                        logger.error(f"Error serializing hadith {hadith_id} to JSON for caching: {e}")
+                return result_dict
+            else:
+                return None # Hadith not found
         except sqlite3.Error as e:
             logger.error(f'Error retrieving hadith by ID {hadith_id}: {str(e)}')
             return None
@@ -435,12 +442,11 @@ class HadithDatabase:
         """Updates the statistics counter in the SQLite database."""
         if not self.conn: return
         try:
-            with self.conn:
-                # Use INSERT ON CONFLICT for atomic increment/insert
-                self.conn.execute('''
-                    INSERT INTO stats (type, count, last_updated) VALUES (?, 1, CURRENT_TIMESTAMP)
-                    ON CONFLICT(type) DO UPDATE SET count = count + 1, last_updated = CURRENT_TIMESTAMP
-                ''', (stat_type,))
+            # Use INSERT ON CONFLICT for atomic increment/insert
+            self.conn.execute('''
+                INSERT INTO stats (type, count, last_updated) VALUES (?, 1, CURRENT_TIMESTAMP)
+                ON CONFLICT(type) DO UPDATE SET count = count + 1, last_updated = CURRENT_TIMESTAMP
+            ''', (stat_type,))
         except sqlite3.Error as e:
             logger.error(f'Error updating SQLite statistics for {stat_type}: {str(e)}')
 
@@ -449,9 +455,9 @@ class HadithDatabase:
         if not self.conn: return {}
         logger.debug("Fetching stats from SQLite")
         try:
-            with self.conn:
-                cursor = self.conn.execute('SELECT type, count FROM stats')
-                return {row['type']: row['count'] for row in cursor.fetchall()}
+            cursor = self.conn.execute('SELECT type, count FROM stats')
+            results = {row['type']: row['count'] for row in cursor.fetchall()}
+            return results
         except sqlite3.Error as e:
             logger.error(f'Error retrieving statistics from SQLite: {str(e)}')
             return {}
@@ -475,4 +481,17 @@ class HadithDatabase:
                 self.redis = None
             except Exception as e: # Catch potential redis-py close errors
                 logger.error(f"Error closing Redis connection: {e}")
+
+# --- Initialize the shared database instance ---
+# This instance will be imported by other modules (bot.py, handlers.py)
+try:
+    db = HadithDatabase()
+except Exception as e:
+    # Log critical error during instantiation
+    logger.critical(f"CRITICAL: Failed to initialize HadithDatabase during module load: {e}", exc_info=True)
+    # Set db to None or handle appropriately to prevent NameError in importing modules
+    db = None
+    # Depending on severity, you might want to exit here as well,
+    # but allowing other modules to import 'db' as None might be preferable
+    # exit(1)
 
