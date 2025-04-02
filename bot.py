@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import logging
 from telegram.ext import (
     Application,
@@ -11,17 +12,11 @@ from telegram.ext import (
 # Import configuration and logger
 from config import BOT_TOKEN, PERSISTENCE_FILE, logger
 
-# Import database class and initialize the shared instance
-# Make sure database.py is in the same directory or accessible via PYTHONPATH
-from database import HadithDatabase
-try:
-    # Instantiate the database; this instance will be shared across modules
-    db = HadithDatabase()
-except Exception as e:
-    logger.critical(f"CRITICAL: Failed to initialize HadithDatabase: {e}. Bot cannot start.", exc_info=True)
-    exit(1) # Exit if database connection fails
+# Import the shared db instance FROM database.py
+# This resolves the circular import
+from database import db
 
-# Import handlers (which will import the 'db' instance from this module)
+# Import handlers (which will also import 'db' from database.py)
 from handlers import (
     start_command,
     shia_command_handler,
@@ -33,6 +28,12 @@ from handlers import (
 # ---------------------- Main Application Setup ----------------------
 def main() -> None:
     """Sets up and runs the Telegram bot application."""
+
+    # Check if the database object was initialized successfully
+    if not db or not db.conn: # Check specifically for SQLite connection as it's crucial
+         logger.critical("CRITICAL: SQLite Database connection failed. Bot cannot start.")
+         exit(1)
+
     logger.info("Setting up bot application...")
     try:
         # Use PicklePersistence to save user_data across restarts
@@ -89,7 +90,10 @@ if __name__ == '__main__':
     finally:
         # Ensure database connection is closed on exit
         logger.info("Shutting down bot and closing connections...")
-        if 'db' in globals() and db: # Check if db was successfully initialized
+        # Check if db exists and has a close method before calling
+        if 'db' in globals() and db and hasattr(db, 'close'):
             db.close()
+        else:
+             logger.warning("Database instance 'db' not found or initialized properly for closing.")
         logger.info("Shutdown complete.")
 
