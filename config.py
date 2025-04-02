@@ -2,53 +2,56 @@
 import os
 import logging
 
-# --- Configuration ---
-# اسم قاعدة البيانات، يمكن تغييره عبر متغير بيئة
-DATABASE_NAME = os.getenv('DATABASE_NAME', 'v6.db')
-# مصدر بيانات JSON الأولي، يمكن تغييره عبر متغير بيئة
+# --- Logging Configuration ---
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
+
+# --- General Configuration ---
+# !!! استبدل هذا بالرمز المميز الفعلي للبوت الخاص بك !!!
+BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', 'YOUR_BOT_TOKEN_HERE') # Added environment variable option
+PERSISTENCE_FILE = 'bot_persistence_v7_modular.pickle' # File to store user_data
+
+# --- Database Configuration ---
+DATABASE_NAME = os.getenv('DATABASE_NAME', 'v7_hadith_modular.db') # Changed DB name for modular version
 JSON_DATA_SOURCE = os.getenv('JSON_DATA_SOURCE', 'input.json')
-# !!! استبدل هذا بالرمز المميز الفعلي للبوت الخاص بك أو استخدم متغير بيئة !!!
-BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', 'YOUR_BOT_TOKEN_HERE') # IMPORTANT: Replace or set environment variable
-# إعدادات Redis، يمكن تغييرها عبر متغيرات بيئة
+
+# --- Redis Configuration ---
 REDIS_HOST = os.getenv('REDIS_HOST', 'localhost')
 REDIS_PORT = int(os.getenv('REDIS_PORT', '6379'))
 REDIS_DB = int(os.getenv('REDIS_DB', '0'))
-# ملف لتخزين بيانات المستخدم المستمرة (مثل last_query)
-PERSISTENCE_FILE = 'bot_persistence.pickle'
-
-# --- Constants ---
-# الحد الأقصى لطول الرسالة في تيليجرام (أقل قليلاً للأمان)
-MAX_MESSAGE_LENGTH = 4000
-# إعدادات البحث
-SEARCH_CONFIG = {
-    'max_display_warning': 10, # الحد الأقصى للنتائج المعروضة قبل التحذير
-    'min_query_length': 3,     # الحد الأدنى لطول استعلام البحث
-    'rate_limit_per_minute': 60, # حد الطلبات للمستخدم في الدقيقة
-    'max_snippet_length': 100,  # الحد الأقصى لطول المقتطف
-    'fts_result_limit': 50,     # عدد النتائج الأولية لجلبها من FTS
-    'max_search_history': 10000,   # الحد الأقصى لتخزين استعلامات البحث لكل مستخدم في Redis
-}
-
-# إعدادات اتصال Redis
 REDIS_CONFIG = {
     'host': REDIS_HOST,
     'port': REDIS_PORT,
     'db': REDIS_DB,
-    'decode_responses': True, # فك ترميز الاستجابات تلقائيًا (عادةً إلى UTF-8)
-    'socket_timeout': 5,      # مهلة المقبس بالثواني
-    'socket_connect_timeout': 5 # مهلة الاتصال بالمقبس بالثواني
+    'decode_responses': True,
+    'socket_timeout': 5,
+    'socket_connect_timeout': 5
 }
 
-# --- Logging Setup ---
-# إعداد تسجيل الأحداث الأساسي
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO # مستوى التسجيل (INFO, DEBUG, WARNING, ERROR, CRITICAL)
-)
-# الحصول على مسجل خاص بهذا التطبيق
-logger = logging.getLogger(__name__)
+# --- Bot Behavior Configuration ---
+MAX_MESSAGE_LENGTH = 4000 # Telegram max is 4096, use slightly less for safety
+SEARCH_CONFIG = {
+    'max_results_in_snippet_message': 10, # Max results to show in the combined snippet message
+    'min_query_length': 3,
+    'rate_limit_per_minute': 15,
+    'snippet_words_around_match': 5, # Words before/after first match in snippet
+    'fts_result_limit': 50,      # How many results to fetch initially from FTS
+    'max_search_history': 50,      # Max search queries to store per user in Redis
+}
 
-# --- Bot Info ---
-# يمكنك إضافة معلومات أخرى هنا مثل رابط القناة إذا أردت
-BOT_CHANNEL = "@shia_b0t" # مثال
+# --- Input Trigger Words ---
+TRIGGER_WORDS = ['شيعة ', 'شيعه ']
+
+# --- Basic Bot Info (Optional) ---
+BOT_CHANNEL = "@shia_b0t" # Replace with your bot's channel if available
+
+# --- Validation ---
+if not BOT_TOKEN or BOT_TOKEN == 'YOUR_BOT_TOKEN_HERE':
+    logger.critical("FATAL: BOT_TOKEN is not set or is a placeholder in config.py.")
+    exit(1)
+
+logger.info("Configuration loaded.")
 
