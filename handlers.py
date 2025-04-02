@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import asyncio
 import logging
 import sqlite3 # For specific error handling if needed
@@ -7,17 +8,17 @@ from telegram.error import TelegramError, BadRequest
 import redis # For rate limit check
 
 # Import necessary components from other modules
-from config import SEARCH_CONFIG, TRIGGER_WORDS, BOT_CHANNEL, logger
-# Import the db instance created in bot.py
-# This assumes db is instantiated in bot.py and imported here
-from bot import db # Import the shared db instance
+from config import SEARCH_CONFIG, TRIGGER_WORDS, BOT_CHANNEL, logger, MAX_MESSAGE_LENGTH
+# Import the db instance created in database.py
+from database import db # Import the shared db instance from database.py
 from utils import split_text, create_short_snippet
 
 # --- Rate Limiting ---
 
 async def check_rate_limit(user_id: int) -> bool:
     """Checks user's request rate using Redis."""
-    if not db or not db.redis: # Check if db and db.redis are available
+    # Check if db and db.redis were successfully initialized in database.py
+    if not db or not db.redis:
         logger.warning(f"Rate limit check skipped for user {user_id}: Redis unavailable.")
         return False # No rate limiting if Redis is down or db not initialized
 
@@ -58,6 +59,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             welcome_message,
             disable_web_page_preview=True
         )
+        # Update stats only if db is available
         if db: db.update_statistics('start_command')
     except TelegramError as e:
         logger.error(f"TelegramError in start_command for user {user.id}: {e}")
@@ -70,14 +72,23 @@ async def send_full_hadith(update_or_query, context: ContextTypes.DEFAULT_TYPE, 
     Sends the full hadith text, handling splitting and 'More' buttons.
     Can be called from a command (update) or callback (query).
     """
+    # Check if db is available
     if not db:
         logger.error("Database instance not available in send_full_hadith.")
-        # Try to inform the user if possible
         try:
-            reply_func = update_or_query.message.reply_text if hasattr(update_or_query, 'message') and update_or_query.message else update_or_query.callback_query.message.reply_text
-            await reply_func("❌ حدث خطأ في الاتصال بقاعدة البيانات.")
-        except Exception:
-             logger.error("Could not inform user about DB error in send_full_hadith.")
+            # Determine message object carefully
+            message_obj = None
+            if hasattr(update_or_query, 'message') and update_or_query.message:
+                message_obj = update_or_query.message
+            elif hasattr(update_or_query, 'callback_query') and update_or_query.callback_query and update_or_query.callback_query.message:
+                 message_obj = update_or_query.callback_query.message
+
+            if message_obj:
+                 await message_obj.reply_text("❌ حدث خطأ في الاتصال بقاعدة البيانات.")
+            else:
+                 logger.error("Could not determine message object to send DB error.")
+        except Exception as e:
+             logger.error(f"Could not inform user about DB error in send_full_hadith: {e}")
         return
 
     hadith = db.get_hadith_by_id(hadith_id)
@@ -137,6 +148,10 @@ async def send_full_hadith(update_or_query, context: ContextTypes.DEFAULT_TYPE, 
 async def shia_command_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles the /shia {id} command to view a full hadith."""
     if not update.message or not update.message.text: return
+    if not db: # Check db availability
+        logger.error("Database unavailable in shia_command_handler.")
+        await update.message.reply_text("❌ عذراً، خدمة قاعدة البيانات غير متاحة حالياً.")
+        return
 
     command_parts = update.message.text.split()
     hadith_id_str = "N/A"
@@ -157,7 +172,7 @@ async def shia_command_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 
         # Use the common function to send the full hadith
         await send_full_hadith(update, context, hadith_id) # Pass the command update object
-        if db: db.update_statistics('shia_command_view')
+        db.update_statistics('shia_command_view')
 
     except ValueError:
         logger.warning(f"Invalid hadith ID in /shia command: {hadith_id_str}")
@@ -169,7 +184,7 @@ async def shia_command_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         logger.exception(f"Unexpected error handling /shia command for hadith {hadith_id_str}: {e}")
         try:
             await update.message.reply_text("❌ حدث خطأ غير متوقع أثناء عرض الحديث الكامل.")
-        except TelegramError: pass # Avoid further errors if sending fails
+        except TelegramError: pass
 
 
 # --- Message Handler ---
@@ -177,9 +192,10 @@ async def shia_command_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 async def handle_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles text messages, checking for trigger words and performing search."""
     if not update.message or not update.message.text: return
+    # Check db availability early
     if not db:
          logger.error("Database instance not available in handle_search.")
-         # Avoid replying if DB is down to prevent spamming errors
+         # Avoid replying if DB is down
          return
 
     user = update.effective_user
@@ -207,7 +223,7 @@ async def handle_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not query or len(query) < min_len:
         await update.message.reply_text(f"⚠️ الرجاء إدخال نص للبحث بعد كلمة '{trigger_word_used}' ({min_len} أحرف على الأقل).")
         return
-    if await check_rate_limit(user.id):
+    if await check_rate_limit(user.id): # check_rate_limit implicitly checks db.redis
         await update.message.reply_text("⏳ لقد تجاوزت الحد المسموح به من الطلبات. الرجاء الانتظار قليلاً.")
         return
 
@@ -265,7 +281,7 @@ async def handle_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"   📚 <b>الكتاب:</b> {hadith['book']} - <b>رقم:</b> <code>{hadith['id']}</code>"
             )
 
-        # Combine header, snippets, and instructions
+        # Combine header, snippets, and instructions using a multi-line f-string
         snippets_joined = '\n\n'.join(snippet_lines)
         # Ensure consistent HTML formatting for code tag
         instruction_command = f"/shia رقم_الحديث"
@@ -300,6 +316,7 @@ async def more_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
     query = update.callback_query
     await query.answer() # Acknowledge the button press
 
+    # Check db availability
     if not db:
          logger.error("Database instance not available in more_callback_handler.")
          try: await query.edit_message_text("❌ حدث خطأ في الاتصال بقاعدة البيانات.", reply_markup=None)
@@ -371,6 +388,7 @@ async def more_callback_handler(update: Update, context: ContextTypes.DEFAULT_TY
 
         # --- Disable the button on the *previous* message ---
         try:
+            # Edit the message where the button was originally clicked
             await query.edit_message_reply_markup(reply_markup=None)
             logger.debug(f"Removed 'More' button from previous message for hadith {hadith_id}, part {part_index_to_show -1}")
         except BadRequest as e:
