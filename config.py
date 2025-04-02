@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 # --- General Configuration ---
 # !!! استبدل هذا بالرمز المميز الفعلي للبوت الخاص بك !!!
-BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', 'YOUR_BOT_TOKEN_HERE') # Added environment variable option
+BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '7378891608:AAGEYCS7lCgukX8Uqg9vH1HLMWjiX-C4HXg') # Added environment variable option
 PERSISTENCE_FILE = 'bot_persistence_v7_modular.pickle' # File to store user_data
 
 # --- Database Configuration ---
