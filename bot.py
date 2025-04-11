@@ -189,12 +189,16 @@ async def report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                     report_message += f"  - {admin_display_safe}: <code>{count}</code> رسالة\n"
 
         logger.info("Sending report to owner...")
-        await update.message.reply_html(report_message, parse_mode=ParseMode.HTML)
+        # --- التصحيح هنا ---
+        # تم إزالة الوسيط parse_mode=ParseMode.HTML لأنه غير ضروري ومسبب للخطأ
+        await update.message.reply_html(report_message)
+        # --- نهاية التصحيح ---
         logger.info("Report sent successfully.")
 
     except Exception as e:
         logger.error(f"Error generating report: {e}", exc_info=True)
         try:
+            # استخدام reply_text لإرسال رسالة الخطأ لتجنب مشاكل التنسيق
             await update.message.reply_text(f"حدث خطأ أثناء إنشاء التقرير. يرجى مراجعة سجلات البوت.\n خطأ: {e}")
         except Exception as send_error:
              logger.error(f"Could not send error message to user: {send_error}")
@@ -278,12 +282,6 @@ def main() -> None:
 
     # بدء تشغيل البوت
     logger.info(f"Bot starting polling... Monitoring group {TARGET_GROUP_ID}. Owner ID: {OWNER_ID}")
-    # Check if bot can get updates (basic connection test)
-    # try:
-    #     logger.info(f"Bot info: {application.bot.get_me()}") # Requires async context in main, maybe skip
-    # except Exception as e:
-    #     logger.error(f"Failed to connect to Telegram API: {e}")
-    #     return
 
     application.run_polling()
     logger.info("Bot stopped.")
