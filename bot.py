@@ -5,7 +5,7 @@ import html
 import pytz # Keep pytz import in case needed elsewhere
 from datetime import datetime, timedelta
 # Imports for python-telegram-bot v20+
-from telegram import Update # <-- إزالة استيراد Bot
+from telegram import Update
 from telegram.constants import ParseMode, ChatMemberStatus
 from telegram.ext import (
     Application,
@@ -131,14 +131,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """إرسال رسالة ترحيبية عند إرسال /start."""
     if update.effective_user.id == OWNER_ID:
          if update.message:
-            await update.message.reply_text('أهلاً بك! أنا بوت إحصائيات المجموعة. أرسل /report للحصول على التقرير.')
+            await update.message.reply_text('أهلاً بك! أنا بوت إحصائيات المجموعة.\nأرسل /report للحصول على التقرير.')
          else:
             logger.warning("Start command received without update.message")
     else:
         logger.info(f"Ignoring /start command from non-owner user: {update.effective_user.id}")
 
 async def report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """إرسال تقرير إحصائيات المجموعة للمالك."""
+    """إرسال تقرير إحصائيات المجموعة للمالك بتنسيق محسن."""
     user = update.effective_user
     if user.id != OWNER_ID:
         logger.warning(f"Unauthorized /report attempt by user: {user.id}")
@@ -150,7 +150,6 @@ async def report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     try:
         logger.info(f"Fetching administrators for chat ID: {TARGET_GROUP_ID}")
-        # context.bot should be the correct ExtBot instance now
         admins = await context.bot.get_chat_administrators(TARGET_GROUP_ID)
         admin_ids = {admin.user.id for admin in admins}
         admin_details = {admin.user.id: admin.user for admin in admins}
@@ -166,39 +165,56 @@ async def report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         }
         logger.info(f"Filtered admin message counts: {admin_message_counts_filtered}")
 
-        report_message = "📊 <b>تقرير إحصائيات المجموعة</b> 📊\n\n"
-        report_message += f"<b>آخر 24 ساعة:</b>\n"
-        report_message += f"  - إجمالي الرسائل: <code>{stats['messages_24h']}</code>\n"
-        report_message += f"  - عمليات الحظر: <code>{stats['bans_24h']}</code>\n"
-        report_message += f"  - عمليات الكتم: <code>{stats['mutes_24h']}</code>\n\n"
-        report_message += "<b>إحصائيات المشرفين (الإجمالية):</b>\n"
+        # --- بناء رسالة التقرير المحسنة ---
+        report_lines = []
+        report_lines.append("📊 <b>تقرير إحصائيات المجموعة</b> 📊")
+        report_lines.append("━" * 20) # فاصل نصي
+
+        report_lines.append("🕒 <b>آخر 24 ساعة:</b>")
+        report_lines.append(f"  ✉️ إجمالي الرسائل: <code>{stats['messages_24h']}</code>")
+        report_lines.append(f"  🚫 عمليات الحظر: <code>{stats['bans_24h']}</code>")
+        report_lines.append(f"  🔇 عمليات الكتم: <code>{stats['mutes_24h']}</code>")
+        report_lines.append("") # سطر فارغ للمسافة
+
+        report_lines.append("👑 <b>إحصائيات المشرفين (الإجمالية):</b>")
 
         if not admin_details:
-             report_message += "  - لم يتم العثور على مشرفين (أو البوت ليس لديه صلاحية لرؤيتهم).\n"
+             report_lines.append("  <i>لم يتم العثور على مشرفين (أو البوت ليس لديه صلاحية لرؤيتهم).</i>")
         else:
+            # فرز المشرفين حسب عدد الرسائل (تنازليًا)
             sorted_admin_counts = sorted(admin_message_counts_filtered.items(), key=lambda item: item[1], reverse=True)
 
             if not sorted_admin_counts or all(count == 0 for _, count in sorted_admin_counts):
-                 report_message += "  - لا يوجد رسائل مسجلة للمشرفين.\n"
+                 report_lines.append("  <i>لا يوجد رسائل مسجلة للمشرفين.</i>")
             else:
+                rank = 1
                 for admin_id, count in sorted_admin_counts:
                     admin_user = admin_details.get(admin_id)
-                    admin_name = admin_user.full_name if admin_user else f"المشرف (ID: {admin_id})"
+                    admin_name = admin_user.full_name if admin_user else f"ID: {admin_id}"
+                    # استخدام اسم المستخدم إذا كان متاحًا ومناسبًا
                     admin_display = f"@{admin_user.username}" if admin_user and admin_user.username else admin_name
-                    admin_display_safe = html.escape(admin_display)
-                    report_message += f"  - {admin_display_safe}: <code>{count}</code> رسالة\n"
+                    admin_display_safe = html.escape(admin_display) # تجنب مشاكل HTML
 
-        logger.info("Sending report to owner...")
-        # --- التصحيح هنا ---
-        # تم إزالة الوسيط parse_mode=ParseMode.HTML لأنه غير ضروري ومسبب للخطأ
-        await update.message.reply_html(report_message)
-        # --- نهاية التصحيح ---
-        logger.info("Report sent successfully.")
+                    # إضافة أيقونة وترتيب للمشرفين الذين لديهم رسائل
+                    icon = "🔹" if count > 0 else "▫️"
+                    rank_str = f"{rank}. " if count > 0 else ""
+
+                    report_lines.append(f"  {icon} {rank_str}<b>{admin_display_safe}</b>: <code>{count}</code> رسالة")
+
+                    if count > 0:
+                        rank += 1 # زيادة الترتيب فقط لمن لديهم رسائل
+
+        report_message = "\n".join(report_lines) # تجميع الأسطر مع فواصل أسطر
+        # --- نهاية بناء الرسالة المحسنة ---
+
+
+        logger.info("Sending improved report to owner...")
+        await update.message.reply_html(report_message) # لا تحتاج parse_mode هنا
+        logger.info("Improved report sent successfully.")
 
     except Exception as e:
         logger.error(f"Error generating report: {e}", exc_info=True)
         try:
-            # استخدام reply_text لإرسال رسالة الخطأ لتجنب مشاكل التنسيق
             await update.message.reply_text(f"حدث خطأ أثناء إنشاء التقرير. يرجى مراجعة سجلات البوت.\n خطأ: {e}")
         except Exception as send_error:
              logger.error(f"Could not send error message to user: {send_error}")
