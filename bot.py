@@ -2,10 +2,10 @@
 import logging
 import sqlite3
 import html
-import pytz
+import pytz # Keep pytz import in case needed elsewhere
 from datetime import datetime, timedelta
 # Imports for python-telegram-bot v20+
-from telegram import Update, Bot # <-- إضافة استيراد Bot
+from telegram import Update # <-- إزالة استيراد Bot
 from telegram.constants import ParseMode, ChatMemberStatus
 from telegram.ext import (
     Application,
@@ -150,7 +150,7 @@ async def report(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     try:
         logger.info(f"Fetching administrators for chat ID: {TARGET_GROUP_ID}")
-        # Note: context.bot should still work even if Bot was passed to builder
+        # context.bot should be the correct ExtBot instance now
         admins = await context.bot.get_chat_administrators(TARGET_GROUP_ID)
         admin_ids = {admin.user.id for admin in admins}
         admin_details = {admin.user.id: admin.user for admin in admins}
@@ -251,21 +251,16 @@ def main() -> None:
 
     persistence = PicklePersistence(filepath='bot_persistence')
 
-    # --- طريقة بناء التطبيق الجديدة ---
-    # 1. إنشاء كائن Bot أولاً
-    logger.info("Creating Bot instance...")
-    bot = Bot(token=BOT_TOKEN)
-
-    # 2. بناء التطبيق باستخدام كائن Bot وتعطيل JobQueue
-    logger.info("Building application, passing Bot instance and disabling JobQueue...")
+    # --- بناء التطبيق بالطريقة القياسية (باستخدام التوكن) ---
+    logger.info("Building application using token and disabling JobQueue...")
     application = (
         ApplicationBuilder()
-        .bot(bot) # <-- تمرير كائن Bot بدلاً من التوكن
+        .token(BOT_TOKEN) # <-- استخدام التوكن مباشرة ليقوم الباني بإنشاء ExtBot
         .persistence(persistence)
-        .job_queue(None) # <-- تعطيل JobQueue
+        .job_queue(None) # <-- تعطيل JobQueue لتجنب مشاكل apscheduler
         .build()
     )
-    # --- نهاية طريقة البناء الجديدة ---
+    # --- نهاية بناء التطبيق ---
 
 
     # إضافة معالجات الأوامر
@@ -283,6 +278,13 @@ def main() -> None:
 
     # بدء تشغيل البوت
     logger.info(f"Bot starting polling... Monitoring group {TARGET_GROUP_ID}. Owner ID: {OWNER_ID}")
+    # Check if bot can get updates (basic connection test)
+    # try:
+    #     logger.info(f"Bot info: {application.bot.get_me()}") # Requires async context in main, maybe skip
+    # except Exception as e:
+    #     logger.error(f"Failed to connect to Telegram API: {e}")
+    #     return
+
     application.run_polling()
     logger.info("Bot stopped.")
 
